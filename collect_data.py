@@ -1,29 +1,38 @@
-import os, time
-import csv, cv2, mediapipe as mp, numpy as np
+import os
+import time
+import csv
+import cv2
+import mediapipe as mp
+import numpy as np
 
 from utils.distance import extract_distance_features
 from utils.config import dataset_name, cameras
 
-#--> Konfigurasi data yg akan dicollect
-label        : str = "J"          #--> Ganti sesuai huruf yang ingin direkam
-dataset_path : str = dataset_name #--> Path dataset untuk mode statis (CSV)
-samples      : int = 10          #--> Jumlah data per huruf (atau jumlah sequence untuk dynamic)
+# --> Konfigurasi data yg akan dicollect
+label: str = "Z"  # --> Ganti sesuai huruf yang ingin direkam
+dataset_path: str = dataset_name  # --> Path dataset untuk mode statis (CSV)
+# --> Jumlah data per huruf (atau jumlah sequence untuk dynamic)
+samples: int = 100
 
 # Mode perekaman: 'static' = frame tunggal (sekarang), 'dynamic' = sequence bergerak
 mode = 'dynamic'  # pilih 'static' atau 'dynamic'
 
 # Konfigurasi untuk mode dynamic
-sequence_length = 30   # jumlah frame per sequence (contoh: 30 frames ~ 1 detik @30fps)
-max_missing_frames = 5 # jumlah frame tanpa deteksi tangan yang masih diijinkan per sequence
+# jumlah frame per sequence (contoh: 30 frames ~ 1 detik @30fps)
+sequence_length = 100
+# jumlah frame tanpa deteksi tangan yang masih diijinkan per sequence
+max_missing_frames = 100
 sequences_dir = os.path.join('data', 'sequences')
 
-#--> Inisialisasi MediaPipe
+# --> Inisialisasi MediaPipe
 mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=False, max_num_hands=1, min_detection_confidence=0.7)
+hands = mp_hands.Hands(static_image_mode=False,
+                       max_num_hands=1, min_detection_confidence=0.7)
 mp_drawing = mp.solutions.drawing_utils
 
-#--> Webcam
+# --> Webcam
 cap = cv2.VideoCapture(0)
+
 
 def ensure_dir(p):
     if not os.path.exists(p):
@@ -50,7 +59,8 @@ if mode == 'static':
 
         if result.multi_hand_landmarks:
             for hand_landmarks in result.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(image, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                mp_drawing.draw_landmarks(
+                    image, hand_landmarks, mp_hands.HAND_CONNECTIONS)
                 features = extract_distance_features(hand_landmarks.landmark)
                 features.append(label.upper())
                 data.append(features)
@@ -64,9 +74,10 @@ if mode == 'static':
     cap.release()
     cv2.destroyAllWindows()
 
-    #--> Simpan ke CSV
+    # --> Simpan ke CSV
     if len(data) == 0:
-        print(f"⚠️ Tidak ada data yang direkam untuk label '{label.upper()}'. Tidak ada file yang disimpan.")
+        print(
+            f"⚠️ Tidak ada data yang direkam untuk label '{label.upper()}'. Tidak ada file yang disimpan.")
     else:
         if not os.path.exists(os.path.dirname(dataset_path)):
             os.makedirs(os.path.dirname(dataset_path))
@@ -78,7 +89,8 @@ if mode == 'static':
                 writer.writerow(header)
             writer.writerows(data)
 
-        print(f"✅ Data untuk label '{label.upper()}' berhasil disimpan di {dataset_path}")
+        print(
+            f"✅ Data untuk label '{label.upper()}' berhasil disimpan di {dataset_path}")
 
 else:
     # Mode dynamic: simpan sequence per sample (.npy) dan catat label di sequences/labels.csv
@@ -88,12 +100,14 @@ else:
     if not os.path.exists(labels_csv):
         with open(labels_csv, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['filename','label'])
+            writer.writerow(['filename', 'label'])
 
     saved = 0
-    sample_idx = len([name for name in os.listdir(sequences_dir) if name.endswith('.npy')])
+    sample_idx = len([name for name in os.listdir(
+        sequences_dir) if name.endswith('.npy')])
 
-    print(f"Mode DYNAMIC: Akan merekam {samples} sequence untuk label '{label.upper()}'.")
+    print(
+        f"Mode DYNAMIC: Akan merekam {samples} sequence untuk label '{label.upper()}'.")
     print("Instruksi: Tekan SPASI untuk mulai merekam 1 sequence, tekan 'q' untuk keluar.")
 
     try:
@@ -103,7 +117,8 @@ else:
                 continue
 
             display = frame.copy()
-            cv2.putText(display, f"Ready for sequence {saved+1}/{samples} - Press SPACE to record", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0),2)
+            cv2.putText(display, f"Ready for sequence {saved+1}/{samples} - Press SPACE to record", (
+                10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             cv2.imshow('Collecting Sequences', display)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -125,32 +140,38 @@ else:
                     result = hands.process(image_rgb)
                     if result.multi_hand_landmarks:
                         for hand_landmarks in result.multi_hand_landmarks:
-                            feats = extract_distance_features(hand_landmarks.landmark)
+                            feats = extract_distance_features(
+                                hand_landmarks.landmark)
                             seq_features.append(feats)
                             frames_recorded += 1
                             missing = 0
-                            mp_drawing.draw_landmarks(frame2, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                            mp_drawing.draw_landmarks(
+                                frame2, hand_landmarks, mp_hands.HAND_CONNECTIONS)
                             break
                     else:
                         # tidak terdeteksi tangan di frame ini
                         missing += 1
                         # tambahkan small pause
-                        cv2.putText(frame2, 'No hand detected', (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,0,255),2)
+                        cv2.putText(frame2, 'No hand detected', (10, 30),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                         cv2.waitKey(1)
 
-                    cv2.putText(frame2, f"Recording: {frames_recorded}/{sequence_length}", (10,60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,0),2)
+                    cv2.putText(frame2, f"Recording: {frames_recorded}/{sequence_length}",
+                                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
                     cv2.imshow('Collecting Sequences', frame2)
                     if cv2.waitKey(1) & 0xFF == ord('q'):
                         raise KeyboardInterrupt
 
                     # Jika terlalu banyak missing frames, abort sequence
                     if missing > max_missing_frames:
-                        print('Sequence dibatalkan karena terlalu banyak frame tanpa deteksi tangan.')
+                        print(
+                            'Sequence dibatalkan karena terlalu banyak frame tanpa deteksi tangan.')
                         break
 
                 # Selesai merekam sequence: cek panjang
                 if len(seq_features) == sequence_length:
-                    arr = np.array(seq_features, dtype=np.float32)  # shape (sequence_length, n_features)
+                    # shape (sequence_length, n_features)
+                    arr = np.array(seq_features, dtype=np.float32)
                     sample_idx += 1
                     fname = f"{label.upper()}_{sample_idx:04d}.npy"
                     fpath = os.path.join(sequences_dir, fname)
@@ -162,7 +183,8 @@ else:
                     saved += 1
                     print(f"Tersimpan sequence {saved}/{samples} -> {fpath}")
                 else:
-                    print('Sequence tidak disimpan (panjang tidak mencukupi). Coba lagi.')
+                    print(
+                        'Sequence tidak disimpan (panjang tidak mencukupi). Coba lagi.')
 
     except KeyboardInterrupt:
         print('Diberhentikan dengan KeyboardInterrupt.')
@@ -171,4 +193,5 @@ else:
         cap.release()
         cv2.destroyAllWindows()
 
-    print(f"Selesai. Total sequence tersimpan untuk label '{label.upper()}': {saved}")
+    print(
+        f"Selesai. Total sequence tersimpan untuk label '{label.upper()}': {saved}")

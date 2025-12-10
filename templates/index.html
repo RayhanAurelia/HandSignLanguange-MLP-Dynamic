@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASL Recognition - Gesture Blink</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='style.css') }}"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>ASL Recognition</h1>
+        <p class="subtitle">Blink to save • Wave to delete</p>
+      </header>
+
+      <div class="main-content">
+        <div class="video-section">
+          <div class="video-container">
+            <img
+              src="{{ url_for('video_feed') }}"
+              alt="Video Feed"
+              class="video-feed"
+            />
+          </div>
+
+          <div class="info-card">
+            <div class="info-item">
+              <span class="info-label">Model Type:</span>
+              <span class="info-value">{{ model_type }}</span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Status:</span>
+              <span class="info-value status-indicator">
+                <span class="status-dot"></span> Active
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="prediction-section">
+          <div class="prediction-card">
+            <h2>Current Detection</h2>
+            <div class="prediction-display">
+              <div class="prediction-label" id="prediction-label">
+                Waiting...
+              </div>
+              <div class="prediction-confidence">
+                <div class="confidence-label">Confidence</div>
+                <div class="confidence-bar-container">
+                  <div class="confidence-bar" id="confidence-bar"></div>
+                </div>
+                <div class="confidence-value" id="confidence-value">0%</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="saved-text-card">
+            <h2>Saved Text</h2>
+            <div class="saved-text-display" id="saved-text"></div>
+            <button class="clear-btn" onclick="clearText()">Clear Text</button>
+          </div>
+
+          <div class="labels-card">
+            <h3>Available Signs</h3>
+            <div class="labels-grid">
+              {% for label in labels %}
+              <div class="label-item">{{ label }}</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="instructions-card">
+            <h3>How to Use</h3>
+            <div class="instruction-item">
+              <span class="icon">👁️</span>
+              <div>
+                <strong>Blink</strong>
+                <p>Blink your eyes to save the current letter</p>
+              </div>
+            </div>
+            <div class="instruction-item">
+              <span class="icon">👋</span>
+              <div>
+                <strong>Wave</strong>
+                <p>Wave your hand horizontally to delete last letter</p>
+              </div>
+            </div>
+            <div class="instruction-item">
+              <span class="icon">✋</span>
+              <div>
+                <strong>Sign</strong>
+                <p>Make clear hand gestures from the available signs</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer>
+        <p>Powered by TensorFlow, MediaPipe & Flask</p>
+      </footer>
+    </div>
+
+    <script>
+      // Update prediction display every 300ms
+      setInterval(() => {
+        fetch("/prediction")
+          .then((response) => response.json())
+          .then((data) => {
+            const label = data.label || "No hand";
+            const confidence = data.confidence || 0;
+            const savedText = data.saved_text || "";
+
+            document.getElementById("prediction-label").textContent = label;
+            document.getElementById("confidence-value").textContent =
+              (confidence * 100).toFixed(1) + "%";
+
+            const confidenceBar = document.getElementById("confidence-bar");
+            confidenceBar.style.width = confidence * 100 + "%";
+
+            // Update saved text
+            const savedTextEl = document.getElementById("saved-text");
+            savedTextEl.textContent = savedText || "No text saved yet";
+
+            if (savedText) {
+              savedTextEl.classList.add("has-text");
+            } else {
+              savedTextEl.classList.remove("has-text");
+            }
+          })
+          .catch((error) => console.error("Error fetching prediction:", error));
+      }, 300);
+
+      function clearText() {
+        fetch("/clear_text", { method: "POST" })
+          .then((response) => response.json())
+          .then((data) => {
+            document.getElementById("saved-text").textContent =
+              "No text saved yet";
+            document.getElementById("saved-text").classList.remove("has-text");
+          })
+          .catch((error) => console.error("Error clearing text:", error));
+      }
+    </script>
+  </body>
+</html>

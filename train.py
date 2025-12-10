@@ -1,5 +1,10 @@
 import os
-import pickle, numpy as np, pandas as pd, tensorflow as tf, matplotlib.pyplot as plt, seaborn as sns
+import pickle
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelBinarizer
@@ -11,23 +16,67 @@ from utils.config import dataset_name, scaler_name, binarizer_name, model_name
 sequences_dir = os.path.join('data', 'sequences')
 sequences_labels = os.path.join(sequences_dir, 'labels.csv')
 
+
 def load_sequences_and_labels(sequences_dir, labels_csv):
     df_seq = pd.read_csv(labels_csv)
     X_list = []
     y_list = []
-    for _, row in df_seq.iterrows():
+    expected_shape = None
+    skipped_by_label = {}
+
+    for idx, row in df_seq.iterrows():
         fname = row['filename']
         label = row['label']
         fpath = os.path.join(sequences_dir, fname)
         if not os.path.exists(fpath):
             print(f"Warning: sequence file not found {fpath}, skipping")
+            skipped_by_label[label] = skipped_by_label.get(label, 0) + 1
             continue
-        arr = np.load(fpath)
+
+        try:
+            arr = np.load(fpath)
+        except Exception as e:
+            print(f"Warning: error loading {fpath}: {e}, skipping")
+            skipped_by_label[label] = skipped_by_label.get(label, 0) + 1
+            continue
+
+        # Check shape consistency
+        if expected_shape is None:
+            expected_shape = arr.shape
+            print(f"Reference shape set to: {expected_shape}")
+        elif arr.shape != expected_shape:
+            # Try to resize sequence to match expected length
+            current_len, n_feat = arr.shape
+            target_len, _ = expected_shape
+
+            if n_feat == expected_shape[1]:  # Same number of features
+                # Resample sequence to target length using linear interpolation indices
+                indices = np.linspace(0, current_len - 1,
+                                      target_len).astype(int)
+                arr = arr[indices]
+                if idx < 5:  # Only show first few messages
+                    print(
+                        f"Info: Resampled {fname} from {current_len} to {target_len} frames")
+            else:
+                print(
+                    f"Warning: feature mismatch for {fname}. Expected {expected_shape}, got {arr.shape}. Skipping.")
+                skipped_by_label[label] = skipped_by_label.get(label, 0) + 1
+                continue
+
         X_list.append(arr.astype('float32'))
         y_list.append(label)
 
     if len(X_list) == 0:
         raise RuntimeError('No sequence data found.')
+
+    print(f"\n✅ Loaded {len(X_list)} sequences with shape {expected_shape}")
+    if skipped_by_label:
+        print(f"⚠️  Skipped files by label: {skipped_by_label}")
+
+    # Check labels coverage
+    unique_labels = sorted(set(y_list))
+    print(
+        f"✅ Labels in sequences: {unique_labels} ({len(unique_labels)} classes)")
 
     X = np.stack(X_list, axis=0)
     y = np.array(y_list)
@@ -57,15 +106,40 @@ if os.path.exists(sequences_dir) and os.path.exists(sequences_labels):
     if X_stat is not None:
         n_stat_samples, n_features_stat = X_stat.shape
         if n_features_stat != n_features:
-            raise RuntimeError(f"Feature dimension mismatch: sequences have {n_features} features but CSV has {n_features_stat} features")
+            raise RuntimeError(
+                f"Feature dimension mismatch: sequences have {n_features} features but CSV has {n_features_stat} features")
 
         X_stat_seq = np.tile(X_stat[:, None, :], (1, seq_len, 1))
+
+        # Check labels in static data
+        unique_static_labels = sorted(set(y_stat))
+        print(
+            f"✅ Labels in static CSV: {unique_static_labels} ({len(unique_static_labels)} classes)")
+
         # combine
         X = np.concatenate([X_seq, X_stat_seq], axis=0)
         y = np.concatenate([y_seq, y_stat], axis=0)
+
+        # Check combined labels
+        unique_combined = sorted(set(y))
+        print(
+            f"✅ Combined labels: {unique_combined} ({len(unique_combined)} classes)")
     else:
         X = X_seq
         y = y_seq
+
+    # Final check for all A-Z letters
+    expected_letters = [chr(i) for i in range(ord('A'), ord('Z')+1)]
+    actual_letters = sorted(set(y))
+    missing_letters = set(expected_letters) - set(actual_letters)
+
+    if missing_letters:
+        print(
+            f"\n⚠️  WARNING: Missing letters in dataset: {sorted(missing_letters)}")
+        print(
+            f"   Model will only train on available letters: {actual_letters}")
+    else:
+        print(f"\n✅ All A-Z letters present in dataset!")
 
     # Preprocess: scale features across all time-steps
     n_samples, seq_len, n_features = X.shape
@@ -83,9 +157,11 @@ if os.path.exists(sequences_dir) and os.path.exists(sequences_labels):
     y_enc = lb.fit_transform(y)
     # ensure one-hot
     if y_enc.ndim == 1:
-        y_enc = tf.keras.utils.to_categorical(y_enc, num_classes=len(lb.classes_))
+        y_enc = tf.keras.utils.to_categorical(
+            y_enc, num_classes=len(lb.classes_))
     elif y_enc.shape[1] == 1:
-        y_enc = tf.keras.utils.to_categorical(y_enc.ravel(), num_classes=len(lb.classes_))
+        y_enc = tf.keras.utils.to_categorical(
+            y_enc.ravel(), num_classes=len(lb.classes_))
 
     # save label binarizer
     with open(binarizer_name, 'wb') as f:
@@ -106,33 +182,34 @@ if os.path.exists(sequences_dir) and os.path.exists(sequences_labels):
         tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Dense(len(lb.classes_), activation='softmax')
     ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer='adam',
+                  loss='categorical_crossentropy', metrics=['accuracy'])
 
 else:
-    #--> Load dataset (static CSV)
+    # --> Load dataset (static CSV)
     df = pd.read_csv(dataset_name)
 
-    #--> Pisahkan fitur dan label
+    # --> Pisahkan fitur dan label
     X = df.drop("label", axis=1).values.astype("float32")
     y = df["label"].values
 
-    #--> Normalisasi
+    # --> Normalisasi
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-     
-    #--> Simpan scaler
+
+    # --> Simpan scaler
     with open(scaler_name, "wb") as f:
         pickle.dump(scaler, f)
 
-    #--> One-hot encoding label
+    # --> One-hot encoding label
     lb = LabelBinarizer()
     y_encoded = lb.fit_transform(y)
 
-    #--> Simpan label encoder
+    # --> Simpan label encoder
     with open(binarizer_name, "wb") as f:
         pickle.dump(lb, f)
 
-    #--> Split stratified
+    # --> Split stratified
     X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
         X_scaled,
         y,
@@ -143,16 +220,18 @@ else:
 
     # build MLP model for static data
     model = tf.keras.Sequential([
-        tf.keras.layers.Dense(256, activation='relu', input_shape=(X.shape[1],)),
+        tf.keras.layers.Dense(256, activation='relu',
+                              input_shape=(X.shape[1],)),
         tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Dense(128, activation='relu'),
         tf.keras.layers.Dropout(0.3),
         tf.keras.layers.Dense(64, activation='relu'),
         tf.keras.layers.Dense(len(lb.classes_), activation='softmax')
     ])
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    model.compile(optimizer='adam',
+                  loss='categorical_crossentropy', metrics=['accuracy'])
 
-#--> Prepare targets depending on mode
+# --> Prepare targets depending on mode
 if is_dynamic:
     # y_train_raw / y_test_raw already one-hot from split
     y_train = y_train_raw
@@ -164,19 +243,21 @@ else:
 
     # Jika LabelBinarizer mengembalikan kolom tunggal (binary), konversi ke one-hot
     if y_train.ndim == 2 and y_train.shape[1] == 1:
-        y_train = tf.keras.utils.to_categorical(y_train.ravel(), num_classes=len(lb.classes_))
-        y_test = tf.keras.utils.to_categorical(y_test.ravel(), num_classes=len(lb.classes_))
+        y_train = tf.keras.utils.to_categorical(
+            y_train.ravel(), num_classes=len(lb.classes_))
+        y_test = tf.keras.utils.to_categorical(
+            y_test.ravel(), num_classes=len(lb.classes_))
 
 
-
-#--> Callbacks
+# --> Callbacks
 callbacks = [
     tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
     tf.keras.callbacks.ReduceLROnPlateau(patience=3, factor=0.5, verbose=1),
-    tf.keras.callbacks.ModelCheckpoint(model_name, save_best_only=True, monitor='val_accuracy')
+    tf.keras.callbacks.ModelCheckpoint(
+        model_name, save_best_only=True, monitor='val_accuracy')
 ]
 
-#--> Train
+# --> Train
 history = model.fit(
     X_train_raw, y_train,
     validation_data=(X_test_raw, y_test),
@@ -185,19 +266,19 @@ history = model.fit(
     callbacks=callbacks
 )
 
-#--> Evaluate
+# --> Evaluate
 model.load_weights(model_name)
 y_pred = model.predict(X_test_raw)
 y_pred_classes = np.argmax(y_pred, axis=1)
 y_true = np.argmax(y_test, axis=1)
 
-#--> Report
+# --> Report
 print("\n✅ Classification Report:")
 print(classification_report(y_true, y_pred_classes, target_names=lb.classes_))
 acc = np.mean(y_pred_classes == y_true)
 print(f"\n✅ Akurasi Akhir: {round(acc * 100, 2)}%")
 
-#--> Confusion matrix
+# --> Confusion matrix
 plt.figure(figsize=(12, 10))
 sns.heatmap(confusion_matrix(y_true, y_pred_classes), annot=True, fmt='d', cmap='Blues',
             xticklabels=lb.classes_, yticklabels=lb.classes_)
