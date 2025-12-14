@@ -5,6 +5,11 @@ import pandas as pd
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sys
+
+# Fix encoding for Windows console
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelBinarizer
@@ -141,12 +146,32 @@ if os.path.exists(sequences_dir) and os.path.exists(sequences_labels):
     else:
         print(f"\n✅ All A-Z letters present in dataset!")
 
-    # Preprocess: scale features across all time-steps
-    n_samples, seq_len, n_features = X.shape
-    X_flat = X.reshape(-1, n_features)
+    # SPLIT DATA DULU SEBELUM PREPROCESSING (mencegah data leakage)
+    print("\n📊 Splitting data into train/test...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42
+    )
+    print(f"✅ Train samples: {len(X_train)}, Test samples: {len(X_test)}")
+
+    # Preprocess: scale features HANYA dari training data
+    n_train, seq_len, n_features = X_train.shape
+    X_train_flat = X_train.reshape(-1, n_features)
+
+    # Fit scaler HANYA pada training data
     scaler = StandardScaler()
-    X_flat_scaled = scaler.fit_transform(X_flat)
-    X_scaled = X_flat_scaled.reshape(n_samples, seq_len, n_features)
+    scaler.fit(X_train_flat)
+
+    # Transform training data
+    X_train_flat_scaled = scaler.transform(X_train_flat)
+    X_train_scaled = X_train_flat_scaled.reshape(n_train, seq_len, n_features)
+
+    # Transform test data menggunakan scaler yang sama
+    n_test = len(X_test)
+    X_test_flat = X_test.reshape(-1, n_features)
+    X_test_flat_scaled = scaler.transform(X_test_flat)
+    X_test_scaled = X_test_flat_scaled.reshape(n_test, seq_len, n_features)
+
+    print("✅ Scaling completed (fit on train, transform on train & test)")
 
     # save scaler
     with open(scaler_name, 'wb') as f:
@@ -154,32 +179,41 @@ if os.path.exists(sequences_dir) and os.path.exists(sequences_labels):
 
     # encode labels
     lb = LabelBinarizer()
-    y_enc = lb.fit_transform(y)
+    y_train_enc = lb.fit_transform(y_train)
+    y_test_enc = lb.transform(y_test)
+
     # ensure one-hot
-    if y_enc.ndim == 1:
-        y_enc = tf.keras.utils.to_categorical(
-            y_enc, num_classes=len(lb.classes_))
-    elif y_enc.shape[1] == 1:
-        y_enc = tf.keras.utils.to_categorical(
-            y_enc.ravel(), num_classes=len(lb.classes_))
+    if y_train_enc.ndim == 1:
+        y_train_enc = tf.keras.utils.to_categorical(
+            y_train_enc, num_classes=len(lb.classes_))
+        y_test_enc = tf.keras.utils.to_categorical(
+            y_test_enc, num_classes=len(lb.classes_))
+    elif y_train_enc.shape[1] == 1:
+        y_train_enc = tf.keras.utils.to_categorical(
+            y_train_enc.ravel(), num_classes=len(lb.classes_))
+        y_test_enc = tf.keras.utils.to_categorical(
+            y_test_enc.ravel(), num_classes=len(lb.classes_))
 
     # save label binarizer
     with open(binarizer_name, 'wb') as f:
         pickle.dump(lb, f)
 
-    # split
-    X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
-        X_scaled, y_enc, test_size=0.2, stratify=y, random_state=42
-    )
+    # Assign to variables expected by training loop
+    X_train_raw = X_train_scaled
+    X_test_raw = X_test_scaled
+    y_train_raw = y_train_enc
+    y_test_raw = y_test_enc
 
-    # build LSTM model
+    # build LSTM model with regularization
     model = tf.keras.Sequential([
         tf.keras.layers.Input(shape=(seq_len, n_features)),
         tf.keras.layers.Masking(mask_value=0.0),
-        tf.keras.layers.LSTM(128),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(64, activation='relu'),
-        tf.keras.layers.Dropout(0.3),
+        tf.keras.layers.LSTM(
+            128, kernel_regularizer=tf.keras.regularizers.l2(0.001)),
+        tf.keras.layers.Dropout(0.4),
+        tf.keras.layers.Dense(64, activation='relu',
+                              kernel_regularizer=tf.keras.regularizers.l2(0.001)),
+        tf.keras.layers.Dropout(0.4),
         tf.keras.layers.Dense(len(lb.classes_), activation='softmax')
     ])
     model.compile(optimizer='adam',
@@ -193,9 +227,20 @@ else:
     X = df.drop("label", axis=1).values.astype("float32")
     y = df["label"].values
 
-    # --> Normalisasi
+    # --> SPLIT DATA DULU SEBELUM PREPROCESSING (mencegah data leakage)
+    print("\n📊 Splitting data into train/test...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.25, stratify=y, random_state=42
+    )
+    print(f"✅ Train samples: {len(X_train)}, Test samples: {len(X_test)}")
+
+    # --> Normalisasi HANYA dari training data
     scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
+    scaler.fit(X_train)  # Fit hanya pada training
+    X_train_scaled = scaler.transform(X_train)  # Transform training
+    # Transform test dengan scaler yang sama
+    X_test_scaled = scaler.transform(X_test)
+    print("✅ Scaling completed (fit on train, transform on train & test)")
 
     # --> Simpan scaler
     with open(scaler_name, "wb") as f:
@@ -203,80 +248,120 @@ else:
 
     # --> One-hot encoding label
     lb = LabelBinarizer()
-    y_encoded = lb.fit_transform(y)
+    y_train_encoded = lb.fit_transform(y_train)
+    y_test_encoded = lb.transform(y_test)
+
+    # Ensure one-hot encoding
+    if y_train_encoded.ndim == 2 and y_train_encoded.shape[1] == 1:
+        y_train_encoded = tf.keras.utils.to_categorical(
+            y_train_encoded.ravel(), num_classes=len(lb.classes_))
+        y_test_encoded = tf.keras.utils.to_categorical(
+            y_test_encoded.ravel(), num_classes=len(lb.classes_))
+
+    print(
+        f"✅ Encoded labels: train shape {y_train_encoded.shape}, test shape {y_test_encoded.shape}")
 
     # --> Simpan label encoder
     with open(binarizer_name, "wb") as f:
         pickle.dump(lb, f)
 
-    # --> Split stratified
-    X_train_raw, X_test_raw, y_train_raw, y_test_raw = train_test_split(
-        X_scaled,
-        y,
-        test_size=0.2,
-        stratify=y,
-        random_state=42
-    )
+    # --> Assign to variables expected by training loop
+    X_train_raw = X_train_scaled
+    X_test_raw = X_test_scaled
+    y_train_raw = y_train_encoded
+    y_test_raw = y_test_encoded
 
-    # build MLP model for static data
+    # build MLP model for static data with regularization
     model = tf.keras.Sequential([
         tf.keras.layers.Dense(256, activation='relu',
-                              input_shape=(X.shape[1],)),
+                              input_shape=(X_train_scaled.shape[1],),
+                              kernel_regularizer=tf.keras.regularizers.l2(0.001)),
+        tf.keras.layers.Dropout(0.4),
+        tf.keras.layers.Dense(128, activation='relu',
+                              kernel_regularizer=tf.keras.regularizers.l2(0.001)),
+        tf.keras.layers.Dropout(0.4),
+        tf.keras.layers.Dense(64, activation='relu',
+                              kernel_regularizer=tf.keras.regularizers.l2(0.001)),
         tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dropout(0.3),
-        tf.keras.layers.Dense(64, activation='relu'),
         tf.keras.layers.Dense(len(lb.classes_), activation='softmax')
     ])
     model.compile(optimizer='adam',
                   loss='categorical_crossentropy', metrics=['accuracy'])
 
-# --> Prepare targets depending on mode
-if is_dynamic:
-    # y_train_raw / y_test_raw already one-hot from split
-    y_train = y_train_raw
-    y_test = y_test_raw
-else:
-    # static: y_train_raw/y_test_raw are label strings, transform to one-hot
-    y_train = lb.transform(y_train_raw)
-    y_test = lb.transform(y_test_raw)
+# --> Prepare targets (already encoded properly in both branches)
+y_train = y_train_raw
+y_test = y_test_raw
 
-    # Jika LabelBinarizer mengembalikan kolom tunggal (binary), konversi ke one-hot
-    if y_train.ndim == 2 and y_train.shape[1] == 1:
-        y_train = tf.keras.utils.to_categorical(
-            y_train.ravel(), num_classes=len(lb.classes_))
-        y_test = tf.keras.utils.to_categorical(
-            y_test.ravel(), num_classes=len(lb.classes_))
+print(f"\nFinal data shapes:")
+print(f"   X_train: {X_train_raw.shape}, y_train: {y_train.shape}")
+print(f"   X_test: {X_test_raw.shape}, y_test: {y_test.shape}")
 
-
-# --> Callbacks
+# --> Callbacks with better overfitting prevention
 callbacks = [
-    tf.keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
-    tf.keras.callbacks.ReduceLROnPlateau(patience=3, factor=0.5, verbose=1),
+    tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=7,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        patience=3,
+        factor=0.5,
+        min_lr=1e-7,
+        verbose=1
+    ),
     tf.keras.callbacks.ModelCheckpoint(
-        model_name, save_best_only=True, monitor='val_accuracy')
+        model_name,
+        save_best_only=True,
+        monitor='val_accuracy',
+        verbose=1
+    )
 ]
 
+# --> Print model summary
+print("\nModel Architecture:")
+model.summary()
+
 # --> Train
+print("\nStarting training...")
 history = model.fit(
     X_train_raw, y_train,
     validation_data=(X_test_raw, y_test),
-    epochs=50,
+    epochs=100,
     batch_size=32,
-    callbacks=callbacks
+    callbacks=callbacks,
+    verbose=1
 )
 
 # --> Evaluate
+print("\nEvaluating model...")
 model.load_weights(model_name)
-y_pred = model.predict(X_test_raw)
+
+# Evaluate on training data to check overfitting
+train_loss, train_acc = model.evaluate(X_train_raw, y_train, verbose=0)
+test_loss, test_acc = model.evaluate(X_test_raw, y_test, verbose=0)
+
+print(f"\nTraining Accuracy: {round(train_acc * 100, 2)}%")
+print(f"Test Accuracy: {round(test_acc * 100, 2)}%")
+print(
+    f"Gap (overfitting indicator): {round((train_acc - test_acc) * 100, 2)}%")
+
+if (train_acc - test_acc) > 0.05:
+    print("WARNING: Model might be overfitting (gap > 5%)")
+else:
+    print("Model generalization looks good!")
+
+# Predictions
+y_pred = model.predict(X_test_raw, verbose=0)
 y_pred_classes = np.argmax(y_pred, axis=1)
 y_true = np.argmax(y_test, axis=1)
 
 # --> Report
-print("\n✅ Classification Report:")
+print("\nClassification Report:")
 print(classification_report(y_true, y_pred_classes, target_names=lb.classes_))
 acc = np.mean(y_pred_classes == y_true)
-print(f"\n✅ Akurasi Akhir: {round(acc * 100, 2)}%")
+print(f"\nAkurasi Test Akhir: {round(acc * 100, 2)}%")
 
 # --> Confusion matrix
 plt.figure(figsize=(12, 10))

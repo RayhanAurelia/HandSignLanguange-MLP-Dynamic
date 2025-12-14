@@ -9,7 +9,8 @@ from utils.distance import extract_distance_features
 from utils.config import dataset_name, cameras
 
 # --> Konfigurasi data yg akan dicollect
-label: str = "Z"  # --> Ganti sesuai huruf yang ingin direkam
+label: str = "J"
+""  # --> Ganti sesuai huruf yang ingin direkam
 dataset_path: str = dataset_name  # --> Path dataset untuk mode statis (CSV)
 # --> Jumlah data per huruf (atau jumlah sequence untuk dynamic)
 samples: int = 100
